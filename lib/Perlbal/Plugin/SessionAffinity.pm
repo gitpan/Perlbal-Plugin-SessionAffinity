@@ -2,7 +2,7 @@ use strict;
 use warnings;
 package Perlbal::Plugin::SessionAffinity;
 {
-  $Perlbal::Plugin::SessionAffinity::VERSION = '0.001';
+  $Perlbal::Plugin::SessionAffinity::VERSION = '0.002';
 }
 # ABSTRACT: Sane session affinity (sticky sessions) for Perlbal
 
@@ -12,15 +12,50 @@ use CGI::Cookie;
 use Digest::SHA 'sha1_hex';
 
 my $cookie_hdr = 'X-SERVERID';
-my $id_type    = 'Sequential';
 my $salt       = join q{}, map { $_ = rand 999; s/\.//; $_ } 1 .. 10;
-my $create_id  = sub {
+
+# get the ip and port of the requested backend from the cookie
+sub get_ip_port {
+    my ( $svc, $req ) = @_;
+
+    my $cookie  = $req->header('Cookie');
+    my %cookies = ();
+
+    if ( defined $cookie ) {
+        %cookies = CGI::Cookie->parse($cookie);
+
+        if ( defined $cookies{$cookie_hdr} ) {
+            my $id      = $cookies{$cookie_hdr}->value || '';
+            my $backend = find_backend_by_id( $svc, $id );
+
+            ref $backend and return join ':', @{$backend};
+        }
+    }
+
+    return;
+}
+
+# create an id from ip and optional port
+sub create_id {
     my $ip   = shift;
     my $port = shift || '';
     return sha1_hex( $salt . $ip . $port );
-};
+}
 
-my %loaded_classes = ();
+# using an sha1 checksum id, find the matching backend
+sub find_backend_by_id {
+    my ( $svc, $id ) = @_;
+
+    foreach my $backend ( @{ $svc->{'pool'}{'nodes'} } ) {
+        my $bid = create_id( @{$backend} );
+
+        if ( $bid eq $id ) {
+            return $backend;
+        }
+    }
+
+    return;
+}
 
 sub load {
     # the name of header in the cookie that stores the backend ID
@@ -30,17 +65,6 @@ sub load {
                       "usage: AFFINITY_COOKIE_HEADER = <name>");
 
             ($cookie_hdr) = $mc->args;
-
-            return $mc->ok;
-        },
-    );
-
-    Perlbal::register_global_hook(
-        'manage_command.affinity_id_type', sub {
-            my $mc = shift->parse(qr/^affinity_id_type\s+=\s+(.+)\s*$/,
-                      "usage: AFFINITY_ID_TYPE = <type>");
-
-            ($id_type) = $mc->args;
 
             return $mc->ok;
         },
@@ -60,41 +84,6 @@ sub load {
     return 1;
 }
 
-# get the ip and port of the requested backend from the cookie
-sub get_ip_port {
-    my ( $svc, $req ) = @_;
-
-    my $cookie  = $req->header('Cookie');
-    my %cookies = ();
-
-    if ( defined $cookie ) {
-        %cookies = CGI::Cookie->parse($cookie);
-
-        if ( defined $cookies{$cookie_hdr} ) {
-            my $id      = $cookies{$cookie_hdr}->value;
-            my $backend = find_backend_by_id( $svc, $id );
-
-            ref $backend and return join ':', @{$backend};
-        }
-    }
-
-    return;
-}
-
-sub find_backend_by_id {
-    my ( $svc, $id ) = @_;
-
-    foreach my $backend ( @{ $svc->{'pool'}{'nodes'} } ) {
-        my $bid = $create_id->( @{$backend} );
-
-        if ( $bid eq $id ) {
-            return $backend;
-        }
-    }
-
-    return;
-}
-
 sub register {
     my ( $class, $gsvc ) = @_;
 
@@ -109,7 +98,7 @@ sub register {
             my ( $ip, $port ) = @{$node};
 
             # pool
-            my $pid = $create_id->( $ip, $port );
+            my $pid = create_id( $ip, $port );
             exists $Perlbal::pool{$pid} and next;
 
             my $nodepool = Perlbal::Pool->new($pid);
@@ -158,7 +147,7 @@ sub register {
         my $ip_port = get_ip_port( $svc, $req )
             or return 0;
 
-        my $req_pool_id = $create_id->( split /:/, $ip_port );
+        my $req_pool_id = create_id( split /:/, $ip_port );
         my $req_svc     = $Perlbal::service{"${req_pool_id}_service"};
         $client->{'service'} = $req_svc;
 
@@ -166,32 +155,21 @@ sub register {
     };
 
     my $set_cookie = sub {
-        my $backend  = shift; # Perlbal::BackendHTTP
-        my $res      = $backend->{'res_headers'};
-        my $req      = $backend->{'req_headers'};
+        my $backend = shift; # Perlbal::BackendHTTP
 
-        defined $backend && defined $res
+        defined $backend && defined $backend->{'res_header'}
             or return 0;
 
-        my $svc     = $backend->{'service'};
-        my %cookies = ();
+        my $res = $backend->{'res_headers'};
+        my $req = $backend->{'req_headers'};
+        my $svc = $backend->{'service'};
+
+        my $backend_id = create_id( split /:/, $backend->{'ipport'} );
+        my %cookies    = ();
 
         if ( my $cookie = $req->header('Cookie') ) {
             %cookies = CGI::Cookie->parse($cookie);
         }
-
-        my $class = "Perlbal::Plugin::SessionAffinity::$id_type";
-
-        if ( ! exists $loaded_classes{$class} ) {
-            local $@ = undef;
-            eval "use $class";
-            $@ and croak "Cannot load $class\n";
-
-            $loaded_classes{$class}++;
-        }
-
-        my $backend_id = $class->can("get_backend_id")
-                               ->( $backend, $create_id );
 
         if ( ! defined $cookies{$cookie_hdr} ||
              $cookies{$cookie_hdr}->value ne $backend_id ) {
@@ -248,7 +226,7 @@ Perlbal::Plugin::SessionAffinity - Sane session affinity (sticky sessions) for P
 
 =head1 VERSION
 
-version 0.001
+version 0.002
 
 =head1 SYNOPSIS
 
@@ -356,11 +334,11 @@ header represents, and how many backends exist (since there is no counter).
 
 =item * Limited features
 
-It does not provide the user with a way to control how the backend is picked.
-It only gets them using Perlbal.
+It does not provide the user with a way to control how the header name used
+to keep the IDs.
 
-B<However, this plugin> will give the user the ability to pick backends using
-either randomly, via an external class or others.
+B<However, this plugin> gives the user the ability to pick the header name
+of the backend ID.
 
 =back
 
@@ -380,27 +358,24 @@ that doesn't exist, it will provide the user with a cookie again.
 The plugin sets up dedicated pools and services for each service's node. This
 is required since Perlbal has no way of actually allowing you to specify the
 node a user will go to, only the service. Not to worry, this creation is done
-lazily so it saves as much memory as it can. In the future it might save even
-more.
+lazily so it saves as much memory as it can.
 
 When a user comes in with a cookie of a node that exist in the service's pool
 it will create a pool for it (if one doesn't exist), and a matching service
 for it (if one doesn't exist) and then direct to user to it.
 
 The check against nodes and pools is done live and not against the static
-configuration file. This means that if you're playing some trickery on pools
-(changing them live), it will still work fine.
+configuration file. This means that if you're playing with the pools (changing
+them live, for example), it will still work just fine.
 
 A new service is created using configurations from the existing service. The
 more interesting details is that reuse is emphasized so no new sockets are
 created and instead this new service uses the already existing sockets (along
 with existing connections) instead of firing new ones. It doesn't open a new
-listening or anything like that. This also means your SSL connections work
-seamlessly. Yes, it's insanely cool, I know! :)
+socket for listening or anything like that. This also means your SSL
+connections work seamlessly. Yes, it's insanely cool, I know! :)
 
 =head1 ATTRIBUTES
-
-These are future attributes:
 
 =head2 affinity_cookie_header
 
@@ -429,11 +404,6 @@ Registers our events.
 
 Unregister our hooks and setters events.
 
-=head2 get_backend_id
-
-Get a backend ID number. This is currently simply sequential, but will be
-very dynamic in the near future.
-
 =head2 get_ip_port
 
 Parses a request's cookies and finds the specific cookie relating to session
@@ -442,6 +412,12 @@ affinity and get the backend details via the ID in the cookie.
 =head2 find_backend_by_id
 
 Given a SHA1 ID, find the correct backend to which it belongs.
+
+=head2 create_id
+
+Creates a SHA1 checksum ID using L<Digest::SHA>. The checksum is composed
+of the IP, port and salt. If you want to have more predictability, you can
+provide a salt of C<0> or C<string> and then the checksum would be predictable.
 
 =head1 DEPENDENCIES
 

@@ -8,6 +8,5 @@ README
 dist.ini
 examples/perlbal.conf
 lib/Perlbal/Plugin/SessionAffinity.pm
-lib/Perlbal/Plugin/SessionAffinity/Sequential.pm
 t/00-compile.t
 t/release-pod-syntax.t
