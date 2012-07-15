@@ -2,7 +2,7 @@ use strict;
 use warnings;
 package Perlbal::Plugin::SessionAffinity;
 {
-  $Perlbal::Plugin::SessionAffinity::VERSION = '0.003';
+  $Perlbal::Plugin::SessionAffinity::VERSION = '0.004';
 }
 # ABSTRACT: Sane session affinity (sticky sessions) for Perlbal
 
@@ -157,8 +157,7 @@ sub register {
     my $set_cookie = sub {
         my $backend = shift; # Perlbal::BackendHTTP
 
-        defined $backend && defined $backend->{'res_header'}
-            or return 0;
+        defined $backend or return 0;
 
         my $res = $backend->{'res_headers'};
         my $req = $backend->{'req_headers'};
@@ -226,7 +225,7 @@ Perlbal::Plugin::SessionAffinity - Sane session affinity (sticky sessions) for P
 
 =head1 VERSION
 
-version 0.003
+version 0.004
 
 =head1 SYNOPSIS
 
