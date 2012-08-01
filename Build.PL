@@ -21,14 +21,13 @@ my %module_build_args = (
     "Sawyer X <xsawyerx\@cpan.org>"
   ],
   "dist_name" => "Perlbal-Plugin-SessionAffinity",
-  "dist_version" => "0.004",
+  "dist_version" => "0.005",
   "license" => "perl",
   "module_name" => "Perlbal::Plugin::SessionAffinity",
   "recommends" => {},
   "recursive_test_files" => 1,
   "requires" => {
     "CGI::Cookie" => 0,
-    "Carp" => 0,
     "Digest::SHA" => 0,
     "Perlbal" => 0,
     "strict" => 0,

@@ -27,13 +27,12 @@ my %WriteMakefileArgs = (
   "NAME" => "Perlbal::Plugin::SessionAffinity",
   "PREREQ_PM" => {
     "CGI::Cookie" => 0,
-    "Carp" => 0,
     "Digest::SHA" => 0,
     "Perlbal" => 0,
     "strict" => 0,
     "warnings" => 0
   },
-  "VERSION" => "0.004",
+  "VERSION" => "0.005",
   "test" => {
     "TESTS" => "t/*.t"
   }

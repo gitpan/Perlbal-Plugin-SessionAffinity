@@ -2,17 +2,17 @@ use strict;
 use warnings;
 package Perlbal::Plugin::SessionAffinity;
 {
-  $Perlbal::Plugin::SessionAffinity::VERSION = '0.004';
+  $Perlbal::Plugin::SessionAffinity::VERSION = '0.005';
 }
 # ABSTRACT: Sane session affinity (sticky sessions) for Perlbal
 
-use Carp;
 use Perlbal;
 use CGI::Cookie;
 use Digest::SHA 'sha1_hex';
 
 my $cookie_hdr = 'X-SERVERID';
 my $salt       = join q{}, map { $_ = rand 999; s/\.//; $_ } 1 .. 10;
+my $use_salt   = 0;
 
 # get the ip and port of the requested backend from the cookie
 sub get_ip_port {
@@ -39,7 +39,8 @@ sub get_ip_port {
 sub create_id {
     my $ip   = shift;
     my $port = shift || '';
-    return sha1_hex( $salt . $ip . $port );
+    my $str  = $use_salt ? $salt . $ip . $port : $ip . $port;
+    return sha1_hex($str);
 }
 
 # using an sha1 checksum id, find the matching backend
@@ -61,7 +62,7 @@ sub load {
     # the name of header in the cookie that stores the backend ID
     Perlbal::register_global_hook(
         'manage_command.affinity_cookie_header', sub {
-            my $mc = shift->parse(qr/^affinity_cookie_header\s+=\s+(.+)\s*$/,
+            my $mc = shift->parse(qr/^\s*affinity_cookie_header\s+=\s+(.+)\s*$/,
                       "usage: AFFINITY_COOKIE_HEADER = <name>");
 
             ($cookie_hdr) = $mc->args;
@@ -72,10 +73,28 @@ sub load {
 
     Perlbal::register_global_hook(
         'manage_command.affinity_salt', sub {
-            my $mc = shift->parse(qr/^affinity_salt\s+=\s+(.+)\s*$/,
+            my $mc = shift->parse(qr/^\s*affinity_salt\s+=\s+(.+)\s*$/,
                       "usage: AFFINITY_SALT = <salt>");
 
             ($salt) = $mc->args;
+
+            return $mc->ok;
+        },
+    );
+
+    Perlbal::register_global_hook(
+        'manage_command.affinity_use_salt', sub {
+            my $mc = shift->parse(qr/^\s*affinity_use_salt\s+=\s+(.+)\s*$/,
+                      "usage: AFFINITY_USE_SALT = <boolean>");
+
+            my ($res) = $mc->args;
+            if ( $res eq 'yes' || $res == 1 ) {
+                $use_salt = 1;
+            } elsif ( $res eq 'no' || $res == 0 ) {
+                $use_salt = 0;
+            } else {
+                die qq"affinity_use_salt must be boolean (yes/no/1/0)";
+            }
 
             return $mc->ok;
         },
@@ -225,7 +244,7 @@ Perlbal::Plugin::SessionAffinity - Sane session affinity (sticky sessions) for P
 
 =head1 VERSION
 
-version 0.004
+version 0.005
 
 =head1 SYNOPSIS
 
@@ -297,9 +316,10 @@ the critical operations.
 =item * Much less security risk
 
 Unlike the other plugin, which sets a cookie with the backend ID correlating
-to the backend order in the pool, this plugin uses SHA1 checksum IDs (with a
-randomly created salt) for each server, and allows you to change the header
-name and the checksum salt (for those seeking predictability) for the cookie.
+to the backend order in the pool, this plugin uses SHA1 checksum IDs (with an
+optionally randomly-created salt) for each server, and allows you to change the
+header name and add a checksum salt (whether randomly-created or your own) for
+the cookie.
 
 This makes it harder for an attacker to understand what the header represents
 and how many backends exist (since there is no counter).
@@ -307,7 +327,9 @@ and how many backends exist (since there is no counter).
 =item * Features
 
 Unlike the other plugin, that simply has things hardcoded, this plugin allows
-to change both the header name and the salt used to create the ID.
+to change both the header name and the salt used to create the ID. By default
+the salt is off but you can turn it on and then either use a randomly-created
+one or set your own.
 
 =back
 
@@ -352,6 +374,20 @@ The name of the cookie header for the session.
 
 Default: B<X-SERVERID>.
 
+=head2 affinity_use_salt
+
+Whether to use a salt or not when calculating SHA1 IDs.
+
+    # both are equal
+    affinity_use_salt = 1
+    affinity_use_salt = yes
+
+    # opposite meaning
+    affinity_use_salt = 0
+    affinity_use_salt = no
+
+Default: B<no>.
+
 =head2 affinity_salt
 
 The salt that is used to create the backend's SHA1 IDs.
@@ -361,7 +397,12 @@ L<Perlbal::Plugin::SessionAffinity> to create the salt on start up:
 
     join q{}, map { $_ = rand 999; s/\.//; $_ } 1 .. 10;
 
-If you want predictability, you can override the salt.
+If you want predictability with salt, you can override it as such:
+
+    affinity_salt = helloworld
+
+    # now the calculation will be:
+    my $sha1 = sha1hex( $salt . $ip . $port );
 
 =head1 SUBROUTINES/METHODS
 
@@ -401,10 +442,6 @@ To parse and create cookies.
 =head2 Digest::SHA
 
 To provide a SHA1 checksum.
-
-=head2 Carp
-
-To provide croak. It's core, don't worry.
 
 =head1 SEE ALSO
 
