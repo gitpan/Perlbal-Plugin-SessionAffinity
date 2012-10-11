@@ -6,7 +6,9 @@ META.yml
 Makefile.PL
 README
 dist.ini
-examples/perlbal.conf
+examples/perlbal-basic.conf
+examples/perlbal-domain.conf
 lib/Perlbal/Plugin/SessionAffinity.pm
 t/00-compile.t
+t/rand.t
 t/release-pod-syntax.t

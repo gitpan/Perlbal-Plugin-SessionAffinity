@@ -3,7 +3,7 @@ NAME
     sessions) for Perlbal
 
 VERSION
-    version 0.005
+    version 0.006
 
 SYNOPSIS
         LOAD SessionAffinity
@@ -26,7 +26,7 @@ SYNOPSIS
 DESCRIPTION
     Perlbal doesn't support session affinity (or otherwise known as "sticky
     sessions") out of the box. There is a plugin on CPAN called
-    Perlbal::Plugin::StickySessions but there's a few problems with it.
+    Perlbal::Plugin::StickySessions but there are a few problems with it.
 
     This plugin should be do a much better job. Go ahead and read why you
     should use this one and how it works.
@@ -55,7 +55,7 @@ WHY YOU SHOULD USE IT
 
     *   It's thin and sane
 
-        Unlike the other plugin, which is basically copy-pasted from some
+        Unlike the other plugin, which is mostly copy-pasted from some
         handling code in Perlbal itself (seriously!), this module contains
         no copy-pasted code, is much smaller and leaner, and is much less
         likely to break between new versions of Perlbal.
@@ -152,6 +152,25 @@ ATTRIBUTES
         # now the calculation will be:
         my $sha1 = sha1hex( $salt . $ip . $port );
 
+  affinity_use_domain
+    Uses domain-mode for finding the backend. This is an alternate way of
+    deciding the backend, which enables backends to persist per domain,
+    allowing you to avoid a fragmented cache. If you have a lot of cache
+    misses because of jumping between backends, try turning this feature on.
+
+    This feature ignores the cookie provided (and does not provide its own
+    cookie) since backends are decided by the domain name alone.
+
+        # both are equal
+        affinity_use_domain = 1
+        affinity_use_domain = yes
+
+        # opposite meaning
+        affinity_use_domain = 0
+        affinity_use_domain = no
+
+    Default: no.
+
 SUBROUTINES/METHODS
   register
     Registers our events.
@@ -166,11 +185,38 @@ SUBROUTINES/METHODS
   find_backend_by_id
     Given a SHA1 ID, find the correct backend to which it belongs.
 
+  find_backend_by_domain_id
+    Given a SHA1 ID for a domain, find the correct backend to which it
+    belongs.
+
   create_id
     Creates a SHA1 checksum ID using Digest::SHA. The checksum is composed
     of the IP, port and salt. If you want to have more predictability, you
     can provide a salt of 0 or "string" and then the checksum would be
     predictable.
+
+    This should make it clear on how it's created:
+
+        if ( $has_salt ) {
+            $checksum = sha1sum( $salt . "$ip:$port" );
+        } else {
+            $checksum = sha1sum( "$ip:$port" );
+        }
+
+  create_domain_id
+    Same concept as the above "create_id" function, except for the following
+    changes:
+
+    Accepts a domain and a list of nodes (which is assumed to be ordered),
+    uses the "domain_index" function to get the index in the nodes of a
+    domain and picks the correct node from the list it receives by index.
+
+  domain_index
+    This function tries to fetch an index number for a given domain name. It
+    accepts a domain name and the maximum index number.
+
+    It translates the domain name to a long number, and uses mod ("%") on
+    it.
 
 DEPENDENCIES
   Perlbal

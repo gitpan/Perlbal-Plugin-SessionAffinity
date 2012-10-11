@@ -2,7 +2,7 @@ use strict;
 use warnings;
 package Perlbal::Plugin::SessionAffinity;
 {
-  $Perlbal::Plugin::SessionAffinity::VERSION = '0.005';
+  $Perlbal::Plugin::SessionAffinity::VERSION = '0.006';
 }
 # ABSTRACT: Sane session affinity (sticky sessions) for Perlbal
 
@@ -13,6 +13,7 @@ use Digest::SHA 'sha1_hex';
 my $cookie_hdr = 'X-SERVERID';
 my $salt       = join q{}, map { $_ = rand 999; s/\.//; $_ } 1 .. 10;
 my $use_salt   = 0;
+my $use_domain = 0;
 
 # get the ip and port of the requested backend from the cookie
 sub get_ip_port {
@@ -35,12 +36,41 @@ sub get_ip_port {
     return;
 }
 
+# create a domain ID
+sub create_domain_id {
+    my $domain = shift || '';
+    my @nodes  = @_;
+
+    # the ID is determined by the specific server
+    # that has the matching index for the domain
+    my $index = domain_index( $domain, scalar @nodes );
+    my $node  = join ':', @{ $nodes[$index] };
+    return sha1_hex( $use_salt ? $salt . $node : $node );
+}
+
 # create an id from ip and optional port
 sub create_id {
     my $ip   = shift;
     my $port = shift || '';
-    my $str  = $use_salt ? $salt . $ip . $port : $ip . $port;
+    my $str  = $use_salt ? $salt . "$ip:$port" : "$ip:$port";
     return sha1_hex($str);
+}
+
+# a nifty little trick:
+# we create a numeric value of the domain name
+# then we use that as a seed for the random function
+# then create a random number which is predictable
+# that is the index of the domain
+sub domain_index {
+    my $domain = shift;
+    my $max    = shift;
+    my $seed   = 0;
+
+    foreach my $char ( split //, $domain ) {
+        $seed += ord $char;
+    }
+
+    return ( $seed % $max);
 }
 
 # using an sha1 checksum id, find the matching backend
@@ -48,9 +78,24 @@ sub find_backend_by_id {
     my ( $svc, $id ) = @_;
 
     foreach my $backend ( @{ $svc->{'pool'}{'nodes'} } ) {
-        my $bid = create_id( @{$backend} );
+        my $backendid = create_id( @{$backend} );
 
-        if ( $bid eq $id ) {
+        if ( $backendid eq $id ) {
+            return $backend;
+        }
+    }
+
+    return;
+}
+
+# TODO: refactor this function
+sub find_backend_by_domain_id {
+    my ( $svc, $id ) = @_;
+
+    foreach my $backend ( @{ $svc->{'pool'}{'nodes'} } ) {
+        my $backendid = create_id( @{$backend} );
+
+        if ( $backendid eq $id ) {
             return $backend;
         }
     }
@@ -100,6 +145,24 @@ sub load {
         },
     );
 
+    Perlbal::register_global_hook(
+        'manage_command.affinity_use_domain', sub {
+            my $mc = shift->parse(qr/^\s*affinity_use_domain\s+=\s+(.+)\s*$/,
+                      "usage: AFFINITY_USE_DOMAIN = <boolean>");
+
+            my ($res) = $mc->args;
+            if ( $res eq 'yes' || $res == 1 ) {
+                $use_domain = 1;
+            } elsif ( $res eq 'no' || $res == 0 ) {
+                $use_domain = 0;
+            } else {
+                die qq"affinity_use_domain must be boolean (yes/no/1/0)";
+            }
+
+            return $mc->ok;
+        },
+    );
+
     return 1;
 }
 
@@ -111,24 +174,25 @@ sub register {
         my $req    = $client->{'req_headers'} or return 0;
         my $svc    = $client->{'service'};
         my $pool   = $svc->{'pool'};
+        my $domain = $req->{'headers'}{'host'};
 
         # make sure all nodes in this service have their own pool
         foreach my $node ( @{ $pool->{'nodes'} } ) {
             my ( $ip, $port ) = @{$node};
 
             # pool
-            my $pid = create_id( $ip, $port );
-            exists $Perlbal::pool{$pid} and next;
+            my $poolid = create_id( $ip, $port );
+            exists $Perlbal::pool{$poolid} and next;
 
-            my $nodepool = Perlbal::Pool->new($pid);
+            my $nodepool = Perlbal::Pool->new($poolid);
             $nodepool->add( $ip, $port );
-            $Perlbal::pool{$pid} = $nodepool;
+            $Perlbal::pool{$poolid} = $nodepool;
 
             # service
-            my $sid = "${pid}_service";
-            exists $Perlbal::service{$sid} and next;
+            my $serviceid = "${poolid}_service";
+            exists $Perlbal::service{$serviceid} and next;
 
-            my $nodeservice = Perlbal->create_service($sid);
+            my $nodeservice = Perlbal->create_service($serviceid);
             my $svc_role    = $svc->{'role'};
 
             # role sets up constraints for the rest
@@ -158,16 +222,31 @@ sub register {
                 }
             }
 
-            $nodeservice->set( pool => $pid );
+            $nodeservice->set( pool => $poolid );
 
-            $Perlbal::service{$sid} = $nodeservice;
+            $Perlbal::service{$serviceid} = $nodeservice;
         }
 
-        my $ip_port = get_ip_port( $svc, $req )
-            or return 0;
+        my $ip_port = get_ip_port( $svc, $req );
 
-        my $req_pool_id = create_id( split /:/, $ip_port );
-        my $req_svc     = $Perlbal::service{"${req_pool_id}_service"};
+        if ( ! $ip_port ) {
+            $use_domain or return 0;
+
+            # we're going to override whatever Perlbal found
+            # because we only care about the domain
+            my $domain        = $req->{'headers'}{'host'};
+            my @ordered_nodes = sort {
+                ( join ':', @{$a} ) cmp ( join ':', @{$b} )
+            } @{ $svc->{'pool'}{'nodes'} };
+
+            my $id      = create_domain_id( $domain, @ordered_nodes );
+            my $backend = find_backend_by_domain_id( $svc, $id );
+            $ip_port = join ':', @{$backend};
+        }
+
+        my ( $ip, $port )    = split /:/, $ip_port;
+        my $req_pool_id      = create_id( $ip, $port );
+        my $req_svc          = $Perlbal::service{"${req_pool_id}_service"};
         $client->{'service'} = $req_svc;
 
         return 0;
@@ -178,13 +257,13 @@ sub register {
 
         defined $backend or return 0;
 
-        my $res = $backend->{'res_headers'};
-        my $req = $backend->{'req_headers'};
-        my $svc = $backend->{'service'};
-
+        my $res        = $backend->{'res_headers'};
+        my $req        = $backend->{'req_headers'};
+        my $svc        = $backend->{'service'};
+        my $domain     = $req->{'headers'}{'host'};
         my $backend_id = create_id( split /:/, $backend->{'ipport'} );
-        my %cookies    = ();
 
+        my %cookies = ();
         if ( my $cookie = $req->header('Cookie') ) {
             %cookies = CGI::Cookie->parse($cookie);
         }
@@ -244,7 +323,7 @@ Perlbal::Plugin::SessionAffinity - Sane session affinity (sticky sessions) for P
 
 =head1 VERSION
 
-version 0.005
+version 0.006
 
 =head1 SYNOPSIS
 
@@ -269,7 +348,7 @@ version 0.005
 
 L<Perlbal> doesn't support session affinity (or otherwise known as "sticky
 sessions") out of the box. There is a plugin on CPAN called
-L<Perlbal::Plugin::StickySessions> but there's a few problems with it.
+L<Perlbal::Plugin::StickySessions> but there are a few problems with it.
 
 This plugin should be do a much better job. Go ahead and read why you should
 use this one and how it works.
@@ -300,7 +379,7 @@ very much up to speed with things.
 
 =item * It's thin and sane
 
-Unlike the other plugin, which is basically copy-pasted from some handling code
+Unlike the other plugin, which is mostly copy-pasted from some handling code
 in L<Perlbal> itself (seriously!), this module contains no copy-pasted code,
 is much smaller and leaner, and is much less likely to break between new
 versions of Perlbal.
@@ -404,6 +483,26 @@ If you want predictability with salt, you can override it as such:
     # now the calculation will be:
     my $sha1 = sha1hex( $salt . $ip . $port );
 
+=head2 affinity_use_domain
+
+Uses domain-mode for finding the backend. This is an alternate way of
+deciding the backend, which enables backends to persist per domain,
+allowing you to avoid a fragmented cache. If you have a lot of cache misses
+because of jumping between backends, try turning this feature on.
+
+This feature ignores the cookie provided (and does not provide its own
+cookie) since backends are decided by the domain name alone.
+
+    # both are equal
+    affinity_use_domain = 1
+    affinity_use_domain = yes
+
+    # opposite meaning
+    affinity_use_domain = 0
+    affinity_use_domain = no
+
+Default: B<no>.
+
 =head1 SUBROUTINES/METHODS
 
 =head2 register
@@ -423,11 +522,39 @@ affinity and get the backend details via the ID in the cookie.
 
 Given a SHA1 ID, find the correct backend to which it belongs.
 
+=head2 find_backend_by_domain_id
+
+Given a SHA1 ID for a domain, find the correct backend to which it belongs.
+
 =head2 create_id
 
 Creates a SHA1 checksum ID using L<Digest::SHA>. The checksum is composed
 of the IP, port and salt. If you want to have more predictability, you can
 provide a salt of C<0> or C<string> and then the checksum would be predictable.
+
+This should make it clear on how it's created:
+
+    if ( $has_salt ) {
+        $checksum = sha1sum( $salt . "$ip:$port" );
+    } else {
+        $checksum = sha1sum( "$ip:$port" );
+    }
+
+=head2 create_domain_id
+
+Same concept as the above C<create_id> function, except for the following
+changes:
+
+Accepts a domain and a list of nodes (which is assumed to be ordered), uses the
+C<domain_index> function to get the index in the nodes of a domain and picks
+the correct node from the list it receives by index.
+
+=head2 domain_index
+
+This function tries to fetch an index number for a given domain name. It
+accepts a domain name and the maximum index number.
+
+It translates the domain name to a long number, and uses mod (C<%>) on it.
 
 =head1 DEPENDENCIES
 

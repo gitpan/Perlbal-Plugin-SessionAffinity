@@ -21,7 +21,7 @@ my %module_build_args = (
     "Sawyer X <xsawyerx\@cpan.org>"
   ],
   "dist_name" => "Perlbal-Plugin-SessionAffinity",
-  "dist_version" => "0.005",
+  "dist_version" => "0.006",
   "license" => "perl",
   "module_name" => "Perlbal::Plugin::SessionAffinity",
   "recommends" => {},

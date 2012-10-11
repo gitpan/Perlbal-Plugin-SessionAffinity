@@ -29,4 +29,4 @@ requires:
 resources:
   bugtracker: http://github.com/xsawyerx/perlbal-plugin-sessionaffinity/issues
   repository: http://github.com/xsawyerx/perlbal-plugin-sessionaffinity
-version: 0.005
+version: 0.006
