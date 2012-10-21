@@ -2,7 +2,7 @@ use strict;
 use warnings;
 package Perlbal::Plugin::SessionAffinity;
 {
-  $Perlbal::Plugin::SessionAffinity::VERSION = '0.006';
+  $Perlbal::Plugin::SessionAffinity::VERSION = '0.007';
 }
 # ABSTRACT: Sane session affinity (sticky sessions) for Perlbal
 
@@ -174,7 +174,6 @@ sub register {
         my $req    = $client->{'req_headers'} or return 0;
         my $svc    = $client->{'service'};
         my $pool   = $svc->{'pool'};
-        my $domain = $req->{'headers'}{'host'};
 
         # make sure all nodes in this service have their own pool
         foreach my $node ( @{ $pool->{'nodes'} } ) {
@@ -234,7 +233,10 @@ sub register {
 
             # we're going to override whatever Perlbal found
             # because we only care about the domain
-            my $domain        = $req->{'headers'}{'host'};
+            my $domain = ref $req eq 'HASH'        ?
+                         $req->{'headers'}{'host'} : # PP version
+                         $req->getHeader('host');    # XS version
+
             my @ordered_nodes = sort {
                 ( join ':', @{$a} ) cmp ( join ':', @{$b} )
             } @{ $svc->{'pool'}{'nodes'} };
@@ -260,7 +262,6 @@ sub register {
         my $res        = $backend->{'res_headers'};
         my $req        = $backend->{'req_headers'};
         my $svc        = $backend->{'service'};
-        my $domain     = $req->{'headers'}{'host'};
         my $backend_id = create_id( split /:/, $backend->{'ipport'} );
 
         my %cookies = ();
@@ -323,7 +324,7 @@ Perlbal::Plugin::SessionAffinity - Sane session affinity (sticky sessions) for P
 
 =head1 VERSION
 
-version 0.006
+version 0.007
 
 =head1 SYNOPSIS
 
