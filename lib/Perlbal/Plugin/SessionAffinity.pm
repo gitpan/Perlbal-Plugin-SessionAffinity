@@ -2,7 +2,7 @@ use strict;
 use warnings;
 package Perlbal::Plugin::SessionAffinity;
 {
-  $Perlbal::Plugin::SessionAffinity::VERSION = '0.007';
+  $Perlbal::Plugin::SessionAffinity::VERSION = '0.008';
 }
 # ABSTRACT: Sane session affinity (sticky sessions) for Perlbal
 
@@ -233,9 +233,9 @@ sub register {
 
             # we're going to override whatever Perlbal found
             # because we only care about the domain
-            my $domain = ref $req eq 'HASH'        ?
-                         $req->{'headers'}{'host'} : # PP version
-                         $req->getHeader('host');    # XS version
+            my $domain = ref $req eq 'Perlbal::XS::HTTPHeaders' ?
+                         $req->getHeader('host')                : # XS version
+                         $req->{'headers'}{'host'};               # PP version
 
             my @ordered_nodes = sort {
                 ( join ':', @{$a} ) cmp ( join ':', @{$b} )
@@ -324,7 +324,7 @@ Perlbal::Plugin::SessionAffinity - Sane session affinity (sticky sessions) for P
 
 =head1 VERSION
 
-version 0.007
+version 0.008
 
 =head1 SYNOPSIS
 
