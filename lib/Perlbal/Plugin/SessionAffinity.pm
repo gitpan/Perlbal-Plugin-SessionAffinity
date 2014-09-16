@@ -1,27 +1,42 @@
 use strict;
 use warnings;
 package Perlbal::Plugin::SessionAffinity;
-{
-  $Perlbal::Plugin::SessionAffinity::VERSION = '0.010';
-}
 # ABSTRACT: Sane session affinity (sticky sessions) for Perlbal
-
+$Perlbal::Plugin::SessionAffinity::VERSION = '0.100';
 use Perlbal;
 use Hash::Util;
 use CGI::Cookie;
+use MIME::Base64;
+use Digest::MD5 'md5';
 use Digest::SHA 'sha1_hex';
 
-my $cookie_hdr = 'X-SERVERID';
-my $salt       = join q{}, map { $_ = rand 999; s/\.//; $_ } 1 .. 10;
-my $use_salt   = 0;
-my $use_domain = 0;
+my $default_cookie_hdr = 'X-SERVERID';
+my $cookie_hdr_sub     = sub { encode_base64( md5( $_[0] ) ) };
+my $salt               = join q{}, map { $_ = rand 999; s/\.//; $_ } 1 .. 10;
+my $use_salt           = 0;
+my $use_domain         = 0;
+my $use_dynamic_cookie = 0;
+
+sub get_domain_from_req {
+    my $req    = shift;
+    my $domain = ref $req eq 'Perlbal::XS::HTTPHeaders' ?
+                 $req->getHeader('host')                : # XS version
+                 $req->{'headers'}{'host'};               # PP version
+
+    return $domain;
+}
 
 # get the ip and port of the requested backend from the cookie
 sub get_ip_port {
     my ( $svc, $req ) = @_;
 
-    my $cookie  = $req->header('Cookie');
-    my %cookies = ();
+    my $domain     = get_domain_from_req($req);
+    my $cookie_hdr = $use_dynamic_cookie        ?
+                     $cookie_hdr_sub->($domain) :
+                     $default_cookie_hdr;
+
+    my $cookie     = $req->header('Cookie');
+    my %cookies    = ();
 
     if ( defined $cookie ) {
         %cookies = CGI::Cookie->parse($cookie);
@@ -111,7 +126,7 @@ sub load {
             my $mc = shift->parse(qr/^\s*affinity_cookie_header\s+=\s+(.+)\s*$/,
                       "usage: AFFINITY_COOKIE_HEADER = <name>");
 
-            ($cookie_hdr) = $mc->args;
+            ($default_cookie_hdr) = $mc->args;
 
             return $mc->ok;
         },
@@ -158,6 +173,24 @@ sub load {
                 $use_domain = 0;
             } else {
                 die qq"affinity_use_domain must be boolean (yes/no/1/0)";
+            }
+
+            return $mc->ok;
+        },
+    );
+
+    Perlbal::register_global_hook(
+        'manage_command.affinity_use_dynamic_cookie', sub {
+            my $mc = shift->parse(qr/^\s*affinity_use_dynamic_cookie\s+=\s+(.+)\s*$/,
+                      "usage: AFFINITY_USE_DYNAMIC_COOKIE = <boolean>");
+
+            my ($res) = $mc->args;
+            if ( $res eq 'yes' || $res == 1 ) {
+                $use_dynamic_cookie = 1;
+            } elsif ( $res eq 'no' || $res == 0 ) {
+                $use_dynamic_cookie = 0;
+            } else {
+                die qq"affinity_use_dynamic_cookie must be boolean (yes/no/1/0)";
             }
 
             return $mc->ok;
@@ -247,9 +280,7 @@ sub register {
 
             # we're going to override whatever Perlbal found
             # because we only care about the domain
-            my $domain = ref $req eq 'Perlbal::XS::HTTPHeaders' ?
-                         $req->getHeader('host')                : # XS version
-                         $req->{'headers'}{'host'};               # PP version
+            my $domain = get_domain_from_req($req);
 
             my @ordered_nodes = sort {
                 ( join ':', @{$a} ) cmp ( join ':', @{$b} )
@@ -277,6 +308,10 @@ sub register {
         my $req        = $backend->{'req_headers'};
         my $svc        = $backend->{'service'};
         my $backend_id = create_id( split /:/, $backend->{'ipport'} );
+        my $domain     = get_domain_from_req($req);
+        my $cookie_hdr = $use_dynamic_cookie        ?
+                         $cookie_hdr_sub->($domain) :
+                         $default_cookie_hdr;
 
         my %cookies = ();
         if ( my $cookie = $req->header('Cookie') ) {
@@ -338,7 +373,7 @@ Perlbal::Plugin::SessionAffinity - Sane session affinity (sticky sessions) for P
 
 =head1 VERSION
 
-version 0.010
+version 0.100
 
 =head1 SYNOPSIS
 
@@ -543,6 +578,23 @@ cookie) since backends are decided by the domain name alone.
 
 Default: B<no>.
 
+=head2 affinity_use_dynamic_cookie
+
+Allows you to provide domain-specific dynamic cookies. In case you're serving
+multiple domains and you want each one to have its own cookie, you can turn
+this feature on, and it will generate a cookie that is an MD5 of the domain,
+then wrapped in base64.
+
+    # both are equal
+    affinity_use_dynamic_cookie = 1
+    affinity_use_dynamic_cookie = yes
+
+    # opposite meaning
+    affinity_use_dynamic_cookie = 0
+    affinity_use_dynamic_cookie = no
+
+Default: B<no>.
+
 =head1 SUBROUTINES/METHODS
 
 =head2 register
@@ -620,7 +672,7 @@ Sawyer X <xsawyerx@cpan.org>
 
 =head1 COPYRIGHT AND LICENSE
 
-This software is copyright (c) 2013 by Sawyer X.
+This software is copyright (c) 2014 by Sawyer X.
 
 This is free software; you can redistribute it and/or modify it under
 the same terms as the Perl 5 programming language system itself.

@@ -3,7 +3,7 @@ NAME
     sessions) for Perlbal
 
 VERSION
-    version 0.010
+    version 0.100
 
 SYNOPSIS
         LOAD SessionAffinity
@@ -196,6 +196,22 @@ ATTRIBUTES
 
     Default: no.
 
+  affinity_use_dynamic_cookie
+    Allows you to provide domain-specific dynamic cookies. In case you're
+    serving multiple domains and you want each one to have its own cookie,
+    you can turn this feature on, and it will generate a cookie that is an
+    MD5 of the domain, then wrapped in base64.
+
+        # both are equal
+        affinity_use_dynamic_cookie = 1
+        affinity_use_dynamic_cookie = yes
+
+        # opposite meaning
+        affinity_use_dynamic_cookie = 0
+        affinity_use_dynamic_cookie = no
+
+    Default: no.
+
 SUBROUTINES/METHODS
   register
     Registers our events.
@@ -259,7 +275,7 @@ AUTHOR
     Sawyer X <xsawyerx@cpan.org>
 
 COPYRIGHT AND LICENSE
-    This software is copyright (c) 2013 by Sawyer X.
+    This software is copyright (c) 2014 by Sawyer X.
 
     This is free software; you can redistribute it and/or modify it under
     the same terms as the Perl 5 programming language system itself.
